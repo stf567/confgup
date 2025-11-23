@@ -82,6 +82,15 @@ def generate_binary(ir_list: List[Dict[str, Any]]) -> bytes:
     return bytes(out)
 
 
+def print_binary_readable(binary: bytes):
+    print("Binary dump:")
+    for i, b in enumerate(binary):
+        print(f"{b:02X}", end=" ")
+        if (i + 1) % 16 == 0:
+            print()
+    print("\nTotal bytes:", len(binary))
+
+
 def print_ir_readable(ir_list: List[Dict[str, Any]]):
     for idx, instr in enumerate(ir_list, start=1):
         print(f"Инструкция #{idx}: {instr['mnemonic']} (opcode=0x{instr['opcode']:02X}, size={instr['size']})")
@@ -96,10 +105,10 @@ def print_ir_readable(ir_list: List[Dict[str, Any]]):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CSV → IR assembler")
+    parser = argparse.ArgumentParser(description="CSV → binary assembler")
     parser.add_argument("input", help="Path to input CSV file")
     parser.add_argument("output", help="Path to output binary file")
-    parser.add_argument("--test", action="store_true", help="Print IR instead of writing binary")
+    parser.add_argument("--test", action="store_true", help="Print assembled binary instead of saving")
 
     args = parser.parse_args()
 
@@ -114,13 +123,14 @@ def main():
             print(f"[ERROR] line {i}: {e}", file=sys.stderr)
             sys.exit(1)
 
+    binary = generate_binary(ir_list)
+
+    # TEST MODE — print byte dump
     if args.test:
-        print_ir_readable(ir_list)
-        print("\nJSON representation:")
-        print(json.dumps(ir_list, indent=2, ensure_ascii=False))
+        print_binary_readable(binary)
         return
 
-    binary = generate_binary(ir_list)
+    # NORMAL MODE — save file
     with open(args.output, "wb") as f:
         f.write(binary)
 
