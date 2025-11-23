@@ -26,8 +26,6 @@ def parse_value(s: str):
 def load_csv(path: str) -> List[Dict[str, str]]:
     with open(path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-
-        # Удаляем BOM и пробелы у имени колонок
         clean_fieldnames = [name.lstrip("\ufeff").strip() for name in reader.fieldnames]
         reader.fieldnames = clean_fieldnames
 
@@ -72,7 +70,6 @@ def generate_binary(ir_list: List[Dict[str, Any]]) -> bytes:
 
     for instr in ir_list:
         out.append(instr["opcode"] & 0xFF)
-
         for _, value in instr["fields"].items():
             if value is None:
                 out.extend((0).to_bytes(4, "little"))
@@ -82,55 +79,103 @@ def generate_binary(ir_list: List[Dict[str, Any]]) -> bytes:
     return bytes(out)
 
 
-def print_binary_readable(binary: bytes):
-    print("Binary dump:")
-    for i, b in enumerate(binary):
-        print(f"{b:02X}", end=" ")
-        if (i + 1) % 16 == 0:
-            print()
-    print("\nTotal bytes:", len(binary))
+class SimpleUVM:
+    def __init__(self):
+        self.data_mem = [0] * 65536  # 64 KB данных
+        self.registers = [0] * 8     # 8 регистров
+        self.pc = 0
 
+    def load_program(self, binary: bytes):
+        self.program = binary
 
-def print_ir_readable(ir_list: List[Dict[str, Any]]):
-    for idx, instr in enumerate(ir_list, start=1):
-        print(f"Инструкция #{idx}: {instr['mnemonic']} (opcode=0x{instr['opcode']:02X}, size={instr['size']})")
+    def fetch_byte(self):
+        b = self.program[self.pc]
+        self.pc += 1
+        return b
 
-        for name, value in instr["fields"].items():
-            if value is None:
-                print(f"  {name}: <None>")
+    def fetch_word(self):
+        w = int.from_bytes(self.program[self.pc:self.pc + 4], "little")
+        self.pc += 4
+        return w
+
+    def run(self):
+        while self.pc < len(self.program):
+            opcode = self.fetch_byte()
+
+            if opcode == 0x01:  # LOAD_CONST
+                A = self.fetch_word()
+                B = self.fetch_word()
+                CONST = self.fetch_word()
+                self.registers[A] = CONST
+
+            elif opcode == 0x02:  # READ_MEM
+                A = self.fetch_word()
+                B = self.fetch_word()
+                OFFSET = self.fetch_word()
+                addr = self.registers[B] + OFFSET
+                self.registers[A] = self.data_mem[addr]
+
+            elif opcode == 0x03:  # WRITE_MEM
+                A = self.fetch_word()
+                B = self.fetch_word()
+                OFFSET = self.fetch_word()
+                addr = self.registers[B] + OFFSET
+                self.data_mem[addr] = self.registers[A]
+
+            elif opcode == 0x04:  # POPCT
+                A = self.fetch_word()
+                self.registers[A] = bin(self.registers[A]).count("1")
+
             else:
-                print(f"  {name}: {value} (0x{value:X})")
+                print(f"ERROR: Unknown opcode 0x{opcode:02X}")
+                break
 
-        print("-" * 40)
+def dump_memory(path: str, data_mem, start: int, end: int):
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["address", "value"])
+        for addr in range(start, end + 1):
+            writer.writerow([addr, data_mem[addr]])
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CSV → binary assembler")
-    parser.add_argument("input", help="Path to input CSV file")
-    parser.add_argument("output", help="Path to output binary file")
-    parser.add_argument("--test", action="store_true", help="Print assembled binary instead of saving")
+    parser = argparse.ArgumentParser(description="CSV assembler + UVM interpreter")
+
+    parser.add_argument("input", help="Input CSV or BIN file")
+    parser.add_argument("output", help="Output file")
+    parser.add_argument("--test", action="store_true")
+    parser.add_argument("--run", action="store_true", help="Run interpreter instead of assembling")
+    parser.add_argument("--dump-start", type=int, default=0)
+    parser.add_argument("--dump-end", type=int, default=0)
 
     args = parser.parse_args()
 
-    rows = load_csv(args.input)
+    if args.run:
+        with open(args.input, "rb") as f:
+            binary = f.read()
 
+        uvm = SimpleUVM()
+        uvm.load_program(binary)
+        uvm.run()
+
+        dump_memory(args.output, uvm.data_mem, args.dump_start, args.dump_end)
+
+        print("DONE: memory dump saved.")
+        return
+
+    rows = load_csv(args.input)
     ir_list = []
     for i, row in enumerate(rows, start=1):
-        try:
-            ir = assemble_instruction(row, i)
-            ir_list.append(ir)
-        except Exception as e:
-            print(f"[ERROR] line {i}: {e}", file=sys.stderr)
-            sys.exit(1)
+        ir = assemble_instruction(row, i)
+        ir_list.append(ir)
 
     binary = generate_binary(ir_list)
 
-    # TEST MODE — print byte dump
     if args.test:
-        print_binary_readable(binary)
+        print("Binary dump:")
+        print(" ".join(f"{b:02X}" for b in binary))
         return
 
-    # NORMAL MODE — save file
     with open(args.output, "wb") as f:
         f.write(binary)
 
